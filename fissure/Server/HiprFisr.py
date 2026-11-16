@@ -369,6 +369,18 @@ class HiprFisr:
         artifact_transfer_task = asyncio.create_task(self.artifact_transfer_loop())
         self.child_tasks.append(artifact_transfer_task)
 
+        # Optional, local-only read-only CLI/MCP interface. Unlike the ZMQ
+        # backend, this cannot invoke arbitrary HIPRFISR callbacks.
+        self.agent_read_server = None
+        if os.environ.get("FISSURE_AGENT_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+            try:
+                from fissure.Server.agent_bridge import AgentReadServer
+                self.agent_read_server = AgentReadServer(self)
+                await self.agent_read_server.start()
+            except Exception:
+                self.logger.exception("Could not start optional FISSURE agent read-only socket")
+                self.agent_read_server = None
+
         # Start persisted HIPRFISR-hosted Listening Posts marked for Auto Start.
         await self.listening_post_manager.start_autostart()
 
@@ -418,6 +430,14 @@ class HiprFisr:
         # ---------------------------------------------------------
         # Cleanup
         # ---------------------------------------------------------
+        # Stop accepting local agent queries before other Hub services close.
+        if self.agent_read_server is not None:
+            try:
+                await self.agent_read_server.stop()
+            except Exception:
+                self.logger.exception("Could not stop FISSURE agent read-only socket")
+            self.agent_read_server = None
+
         # Stop Listening Posts before tearing down component communications.
         await self.listening_post_manager.shutdown()
 
